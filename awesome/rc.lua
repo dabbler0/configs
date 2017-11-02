@@ -12,6 +12,9 @@ local naughty = require("naughty")
 local menubar = require("menubar")
 local vicious = require("vicious")
 
+-- Load Debian menu entries
+require("debian.menu")
+
 -- {{{ Error handling
 -- Check if awesome encountered an error during startup and fell back to
 -- another config (This code will only ever execute for the fallback config)
@@ -39,11 +42,11 @@ end
 
 -- {{{ Variable definitions
 -- Themes define colours, icons, font and wallpapers.
-beautiful.init("/usr/share/awesome/themes/default/theme.lua")
+beautiful.init("/home/anthony/.config/awesome/theme/theme.lua")
 
 -- This is used later as the default terminal and editor to run.
-terminal = "xterm -fg white -bg black -e /usr/bin/zsh"
-editor = os.getenv("EDITOR") or "vim"
+terminal = "urxvt -e /usr/bin/fish"
+editor = os.getenv("EDITOR") or "editor"
 editor_cmd = terminal .. " -e " .. editor
 
 -- Default modkey.
@@ -56,10 +59,9 @@ modkey = "Mod1"
 -- Table of layouts to cover with awful.layout.inc, order matters.
 local layouts =
 {
-    awful.layout.suit.tile.left,
     awful.layout.suit.tile.right,
-    awful.layout.suit.tile.top,
-    awful.layout.suit.max
+    awful.layout.suit.tile.bottom,
+    awful.layout.suit.max,
 }
 -- }}}
 
@@ -90,9 +92,12 @@ myawesomemenu = {
 }
 
 mymainmenu = awful.menu({ items = { { "awesome", myawesomemenu, beautiful.awesome_icon },
+                                    { "Debian", debian.menu.Debian_menu.Debian },
                                     { "open terminal", terminal }
                                   }
                         })
+
+print(beautiful.awesome_icon)
 
 mylauncher = awful.widget.launcher({ image = beautiful.awesome_icon,
                                      menu = mymainmenu })
@@ -104,23 +109,6 @@ menubar.utils.terminal = terminal -- Set the terminal for applications that requ
 -- {{{ Wibox
 -- Create a textclock widget
 mytextclock = awful.widget.textclock()
-
-batterywidget = wibox.widget.textbox()    
-batterywidget:set_text(" | Battery | ")    
-batterywidgettimer = timer({ timeout = 5 })    
-batterywidgettimer:connect_signal("timeout",    
-  function()    
-    fh = assert(io.popen("acpi | cut -d, -f 2,3 -", "r"))    
-    batterywidget:set_text(" |" .. fh:read("*l") .. " | ")    
-    fh:close()    
-  end    
-)    
-batterywidgettimer:start()
-
-memwidget = wibox.widget.textbox()
-vicious.register(memwidget, vicious.widgets.mem, "$1% RAM | ")
-cpuwidget = wibox.widget.textbox()
-vicious.register(cpuwidget, vicious.widgets.cpu, "$1% CPU")
 
 -- Create a wibox for each screen and add it
 mywibox = {}
@@ -172,17 +160,38 @@ mytasklist.buttons = awful.util.table.join(
                                               if client.focus then client.focus:raise() end
                                           end))
 
+-- Battery box widget
+batbox = wibox.widget.textbox()
+unpack_state = {
+  ["-"] = "Discharging",
+  ["+"] = "Charging",
+  ["↯"] = "Charged",
+  ["⌁"] = "Unknown"
+}
+function battery_format(widget, args)
+  if args[2] < 10 and args[1] ~= "+" then
+    return string.format("| <span color='red'><b>%02d%% %s</b></span>", args[2], unpack_state[args[1]])
+  elseif args[2] < 30 and args[1] ~= "+" then
+    return string.format("| <span color='yellow'>%02d%% %s</span>", args[2], unpack_state[args[1]])
+  elseif args[1] ~= "-" and args[1] ~= "⌁" then
+    return string.format("| <span color='lightgreen'>%02d%% %s</span>", args[2], unpack_state[args[1]])
+  else
+    return string.format("| %02d%% %s", args[2], unpack_state[args[1]])
+  end
+end
+vicious.register(batbox, vicious.widgets.bat, battery_format, 11, "BAT0")
+
+cpubox = wibox.widget.textbox()
+vicious.register(cpubox, vicious.widgets.cpu, " $1% CPU", 3)
+
+membox = wibox.widget.textbox()
+vicious.cache(vicious.widgets.mem)
+vicious.register(membox, vicious.widgets.mem, " | $1% RAM |", 13)
+
 for s = 1, screen.count() do
     -- Create a promptbox for each screen
     mypromptbox[s] = awful.widget.prompt()
-    -- Create an imagebox widget which will contains an icon indicating which layout we're using.
-    -- We need one layoutbox per screen.
-    mylayoutbox[s] = awful.widget.layoutbox(s)
-    mylayoutbox[s]:buttons(awful.util.table.join(
-                           awful.button({ }, 1, function () awful.layout.inc(layouts, 1) end),
-                           awful.button({ }, 3, function () awful.layout.inc(layouts, -1) end),
-                           awful.button({ }, 4, function () awful.layout.inc(layouts, 1) end),
-                           awful.button({ }, 5, function () awful.layout.inc(layouts, -1) end)))
+
     -- Create a taglist widget
     mytaglist[s] = awful.widget.taglist(s, awful.widget.taglist.filter.all, mytaglist.buttons)
 
@@ -200,12 +209,11 @@ for s = 1, screen.count() do
 
     -- Widgets that are aligned to the right
     local right_layout = wibox.layout.fixed.horizontal()
-    if s == 1 then right_layout:add(wibox.widget.systray()) end
+    --if s == 1 then right_layout:add(wibox.widget.systray()) end
+    right_layout:add(cpubox)
+    right_layout:add(membox)
     right_layout:add(mytextclock)
-    right_layout:add(batterywidget)
-    right_layout:add(memwidget)
-    right_layout:add(cpuwidget)
-    -- right_layout:add(mylayoutbox[s])
+    right_layout:add(batbox)
 
     -- Now bring it all together (with the tasklist in the middle)
     local layout = wibox.layout.align.horizontal()
@@ -231,19 +239,6 @@ globalkeys = awful.util.table.join(
     awful.key({ modkey,           }, "Right",  awful.tag.viewnext       ),
     awful.key({ modkey,           }, "Escape", awful.tag.history.restore),
 
-   awful.key({ }, "XF86PowerOff", function ()
-       awful.util.spawn("sh /etc/xdg/awesome/confirm.sh", false) end),
-   awful.key({ }, "F10", function ()
-       awful.util.spawn("amixer set Master 9%+", false) end),
-   awful.key({ }, "F9", function ()
-       awful.util.spawn("amixer set Master 9%-", false) end),
-   awful.key({ }, "F8", function ()
-       awful.util.spawn("amixer set Master toggle", false) end),
-   awful.key({ }, "F7", function ()
-       awful.util.spawn("xbacklight -inc 10", false) end),
-   awful.key({ }, "F6", function ()
-       awful.util.spawn("xbacklight -dec 10", false) end),
-
     awful.key({ modkey,           }, "j",
         function ()
             awful.client.focus.byidx( 1)
@@ -264,21 +259,18 @@ globalkeys = awful.util.table.join(
     awful.key({ modkey,           }, "u", awful.client.urgent.jumpto),
     awful.key({ modkey,           }, "Tab",
         function ()
-            -- awful.client.focus.history.previous()
-            awful.client.focus.byidx(-1)
+            awful.client.focus.history.previous()
             if client.focus then
                 client.focus:raise()
             end
         end),
 
-    awful.key({ modkey, "Shift"   }, "Tab",
-        function ()
-            -- awful.client.focus.history.previous()
-            awful.client.focus.byidx(1)
-            if client.focus then
-                client.focus:raise()
-            end
-        end),
+    -- Volume and brightness keys
+    awful.key({ }, "F10", function () awful.util.spawn("amixer set Master 7%+", false) end),
+    awful.key({ }, "F9", function () awful.util.spawn("amixer set Master 7%-", false) end),
+    awful.key({ }, "F8", function () awful.util.spawn("amixer set Master toggle", false) end),
+    awful.key({ }, "F7", function () awful.util.spawn("brightness up", false) end),
+    awful.key({ }, "F6", function () awful.util.spawn("brightness down", false) end),
 
     -- Standard program
     awful.key({ modkey, "Shift"   }, "Return", function () awful.util.spawn(terminal) end),
@@ -295,12 +287,6 @@ globalkeys = awful.util.table.join(
     awful.key({ modkey, "Shift"   }, "space", function () awful.layout.inc(layouts, -1) end),
 
     awful.key({ modkey, "Control" }, "n", awful.client.restore),
-
-    -- Brightness
-    awful.key({ }, "XF86MonBrightnessDown", function ()
-        awful.util.spawn("xbacklight -dec 15") end),
-    awful.key({ }, "XF86MonBrightnessUp", function ()
-        awful.util.spawn("xbacklight -inc 15") end),
 
     -- Prompt
     awful.key({ modkey },            "r",     function () mypromptbox[mouse.screen]:run() end),
@@ -397,17 +383,18 @@ awful.rules.rules = {
     { rule = { },
       properties = { border_width = beautiful.border_width,
                      border_color = beautiful.border_normal,
-                     size_hints_honor = false,
                      focus = awful.client.focus.filter,
                      raise = true,
                      keys = clientkeys,
-                     buttons = clientbuttons } },
+                     buttons = clientbuttons,
+                     size_hints_honor = false
+                   } },
     { rule = { class = "MPlayer" },
       properties = { floating = true } },
     { rule = { class = "pinentry" },
       properties = { floating = true } },
     { rule = { class = "gimp" },
-      properties = { floating = true } },
+      properties = { floating = true } }
     -- Set Firefox to always map on tags number 2 of screen 1.
     -- { rule = { class = "Firefox" },
     --   properties = { tag = tags[1][2] } },
@@ -435,6 +422,9 @@ client.connect_signal("manage", function (c, startup)
             awful.placement.no_overlap(c)
             awful.placement.no_offscreen(c)
         end
+    elseif not c.size_hints.user_position and not c.size_hints.program_position then
+        -- Prevent clients from being unreachable after screen count change
+        awful.placement.no_offscreen(c)
     end
 
     local titlebars_enabled = false
